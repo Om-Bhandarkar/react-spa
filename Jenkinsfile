@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         
-        DEPLOY_SERVER_IP = "192.168.1.20"   // ← yaha apni deploy machine ka IP daalo
+        DEPLOY_SERVER_IP = "192.168.100.45"   
 
         // 🗃️ Private Docker Registry
         REGISTRY_URL = "localhost:5000"
