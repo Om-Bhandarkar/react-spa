@@ -62,6 +62,7 @@ pipeline {
                     fi
 
                     echo '===== POSTGRES CHECK ====='
+                    docker rm -f postgres_db || true
                     if command -v psql >/dev/null; then
                         echo '✔ PostgreSQL Installed → Healthcheck'
                         pg_isready || echo '⚠ Postgres may not be healthy'
