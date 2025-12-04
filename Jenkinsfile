@@ -87,22 +87,18 @@ pipeline {
         // ---------------------------------------------------------
         stage('Deploy Application') {
             steps {
-                echo "🚀 Deploying to server: ${DEPLOY_SERVER_IP}"
-
+                echo "🚀 Deploying locally on Jenkins server..."
                 sh """
-                    ssh om@${DEPLOY_SERVER_IP} '
-
-                        echo "Pulling latest image..."
-                        docker pull ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG}
-
-                        echo "Stopping old container (if any)..."
-                        docker rm -f react_app_container || true
-
-                        echo "Starting new container..."
-                        docker run -d --name react_app_container \
-                            -p ${APP_PORT}:80 \
-                            ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG}
-                    '
+                    echo "Pulling latest image..."
+                    docker pull ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG}
+        
+                    echo "Stopping old container..."
+                    docker rm -f react_app_container || true
+        
+                    echo "Starting new container..."
+                    docker run -d --name react_app_container \
+                        -p ${APP_PORT}:80 \
+                        ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG}
                 """
             }
         }
