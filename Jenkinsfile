@@ -13,7 +13,7 @@ pipeline {
         IMAGE_TAG  = "v1"
 
         // 🌐 Application Port
-        APP_PORT = "8080"
+        APP_PORT = "8081"
 
         DOCKERFILE_PATH = "./Dockerfile"
 
