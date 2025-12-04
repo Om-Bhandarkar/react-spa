@@ -7,7 +7,7 @@ pipeline {
         IMAGE_TAG       = "v1"
         APP_PORT        = "8081"
         DOCKERFILE_PATH = "./Dockerfile"
-        COMPOSE_FILE    = "docker-compose.yml" 
+        COMPOSE_FILE    = "./docker-compose.yml" 
     }
 
     stages {
