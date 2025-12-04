@@ -25,21 +25,49 @@ pipeline {
 
         stage('Information Gathering') {
             steps {
+                echo "🔍 System Information Gathering..."
                 sh """
                     echo '===== MACHINE IP ====='
                     echo ${DEPLOY_SERVER_IP}
                     hostname -I
                     docker --version
+                    
+                    echo '===== DOCKER VERSION ====='
+                    docker --version || exit 1
+
+                    echo '===== DOCKER COMPOSE ====='
+                    docker-compose --version || echo 'docker-compose not installed ❌'
+
+                    echo '===== MACHINE IP ====='
+                    hostname -I
+
+                    echo '===== DISK SPACE ====='
+                    df -h
+
+                    echo '===== daemon.json ====='
+                    if [ -f /etc/docker/daemon.json ]; then 
+                        cat /etc/docker/daemon.json
+                    else 
+                        echo 'daemon.json not found (not required but recommended)'
+                    fi
                 """
             }
         }
 
         stage('Identify Docker Registry') {
             steps {
-                sh "curl -f http://${REGISTRY_URL}/v2/"
+                echo "🔎 Checking Docker Registry..."
+
+                sh """
+                    echo Checking registry at: http://${REGISTRY_URL}/v2/
+                    curl -f http://${REGISTRY_URL}/v2/ \
+                        || (echo '❌ Registry unreachable!' && exit 1)
+
+                    echo '✔ Private Registry is reachable!'
+                """
             }
         }
-
+        
         stage('Docker Build & Push') {
             steps {
                 sh """
