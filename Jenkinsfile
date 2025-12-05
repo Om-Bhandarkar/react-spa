@@ -12,7 +12,43 @@ pipeline {
 
     stages {
 
-        /* 1) Detect OS (basic info only) */
+        /* 1) Ask user for remote IP */
+        stage('Get Remote Server IP') {
+            steps {
+                script {
+                    def userInput = input(
+                        id: 'ServerIPInput',
+                        message: "Enter target server IP for SSH:",
+                        parameters: [
+                            string(name: 'TARGET_IP', description: 'Server IP Address')
+                        ]
+                    )
+                    env.TARGET_IP = userInput
+                    echo "➡️ Remote Server: ${env.TARGET_IP}"
+                }
+            }
+        }
+
+        /* 2) SSH into device & detect OS */
+        stage('SSH & Detect Remote OS') {
+            steps {
+                script {
+                    echo "🔐 Connecting to ${env.TARGET_IP} via SSH..."
+
+                    def remoteOutput = sh(
+                        script: """
+                            ssh -o StrictHostKeyChecking=no root@${env.TARGET_IP} "uname -s 2>/dev/null || echo Windows_NT"
+                        """,
+                        returnStdout: true
+                    ).trim().toLowerCase()
+
+                    env.REMOTE_OS = remoteOutput.contains("linux") ? "LINUX" : "WINDOWS"
+                    echo "🖥 Remote Device OS: ${env.REMOTE_OS}"
+                }
+            }
+        }
+
+        /* 3) Detect OS (local machine) */
         stage('Detect OS') {
             steps {
                 script {
@@ -23,11 +59,11 @@ pipeline {
 
                     env.OS_TYPE = os.contains("linux") ? "LINUX" : "WINDOWS"
                 }
-                echo "🖥 OS Detected: ${env.OS_TYPE}"
+                echo "🖥 Jenkins Node OS: ${env.OS_TYPE}"
             }
         }
 
-        /* 2) System Check (Docker + Compose only) */
+        /* 4) System Check (Docker + Compose only) */
         stage('System Check') {
             steps {
                 sh """
@@ -40,12 +76,12 @@ pipeline {
             }
         }
 
-        /* 3) Build + Push Image to registry */
+        /* 5) Build + Push Image to registry */
         stage('Docker Build & Push') {
             steps {
                 sh """
                     echo '🛠 Building Docker Image...'
-                    docker build -t ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG} \
+                    docker build -t ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG} \\
                         -f ${DOCKERFILE_PATH} .
 
                     echo '📤 Pushing Image to Registry...'
@@ -54,7 +90,7 @@ pipeline {
             }
         }
 
-        /* 4) Deploy using docker-compose */
+        /* 6) Deploy using docker-compose */
         stage('Deploy Using Compose') {
             steps {
                 sh """
@@ -70,7 +106,7 @@ pipeline {
             }
         }
 
-        /* 5) Status check after compose deployment */
+        /* 7) Status check after compose deployment */
         stage('Status Check') {
             steps {
                 sh """
