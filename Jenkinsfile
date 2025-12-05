@@ -31,22 +31,25 @@ pipeline {
 
         /* 2) SSH into device & detect OS */
         stage('SSH & Detect Remote OS') {
-            steps {
-                script {
-                    echo "🔐 Connecting to ${env.TARGET_IP} via SSH..."
+    steps {
+        script {
+            withCredentials([sshUserPrivateKey(credentialsId: 'ssh-creds', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
 
-                    def remoteOutput = sh(
-                        script: """
-                            ssh -o StrictHostKeyChecking=no root@${env.TARGET_IP} "uname -s 2>/dev/null || echo Windows_NT"
-                        """,
-                        returnStdout: true
-                    ).trim().toLowerCase()
+                echo "🔐 Connecting to ${env.TARGET_IP} via SSH..."
 
-                    env.REMOTE_OS = remoteOutput.contains("linux") ? "LINUX" : "WINDOWS"
-                    echo "🖥 Remote Device OS: ${env.REMOTE_OS}"
-                }
+                def remoteOutput = sh(
+                    script: """
+                        ssh -i $SSH_KEY -o StrictHostKeyChecking=no $SSH_USER@${env.TARGET_IP} "uname -s 2>/dev/null || echo Windows_NT"
+                    """,
+                    returnStdout: true
+                ).trim().toLowerCase()
+
+                env.REMOTE_OS = remoteOutput.contains("linux") ? "LINUX" : "WINDOWS"
+                echo "🖥 Remote Device OS: ${env.REMOTE_OS}"
             }
         }
+    }
+}
 
         /* 3) Detect OS (local machine) */
         stage('Detect OS') {
