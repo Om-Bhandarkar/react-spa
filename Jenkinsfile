@@ -2,154 +2,135 @@ pipeline {
     agent any
 
     environment {
-        REMOTE_DIR = "/home/${USERNAME}/react-app"
+        REGISTRY_URL    = "localhost:5000"
+        IMAGE_NAME      = "react-app"
+        IMAGE_TAG       = "v1"
+        APP_PORT        = "8081"
+        DOCKERFILE_PATH = "./Dockerfile"
+        COMPOSE_FILE    = "docker-compose.yml" 
     }
 
     stages {
 
-        /* 0) Ask for remote machine details */
-        stage('Input Remote Machine Info') {
+        /* 1) Detect OS */
+        stage('Detect OS') {
             steps {
                 script {
-                    def data = input(
-                        message: "Enter Remote Machine Details:",
-                        parameters: [
-                            string(name: 'TARGET_IP', description: 'Server IP'),
-                            string(name: 'USERNAME', description: 'SSH Username'),
-                            password(name: 'PASSWORD', description: 'SSH Password')
-                        ]
-                    )
-                    
-                    env.TARGET_IP = data.TARGET_IP
-                    env.USERNAME  = data.USERNAME
-                    env.PASSWORD  = data.PASSWORD
+                    def os = sh(
+                        script: "uname -s 2>/dev/null || echo Windows_NT",
+                        returnStdout: true
+                    ).trim().toLowerCase()
 
-                    echo "➡️ Deploying to remote server: ${env.TARGET_IP}"
+                    if (os.contains("linux")) env.OS_TYPE = "LINUX"
+                    else env.OS_TYPE = "WINDOWS"
                 }
+                echo "🖥 OS Detected: ${env.OS_TYPE}"
             }
         }
 
-        /* 1) Check + Install Docker */
-        stage('Check & Install Docker') {
+        /* 2) System Info */
+        stage('System Check') {
             steps {
                 sh """
-                sshpass -p '${PASSWORD}' ssh -o StrictHostKeyChecking=no ${USERNAME}@${TARGET_IP} '
-                    echo "🔥 Checking Docker..."
-                    if command -v docker >/dev/null 2>&1; then
-                        echo "✔ Docker already installed"
-                        docker --version
-                    else
-                        echo "❌ Docker not found → Installing..."
-                        sudo apt-get update -y
-                        curl -fsSL https://get.docker.com | sudo sh
-                    fi
-                '
+                    docker --version || echo '❌ Docker not installed'
+                    docker compose version || docker-compose --version || echo '❌ Compose not installed'
                 """
             }
         }
 
-        /* 2) Check + Install Docker Compose */
-        stage('Check & Install Docker Compose') {
+        /* 3) Check Docker, Compose, Postgres, Redis */
+        stage('Check Dependencies & Start DB Containers') {
+            when { environment name: 'OS_TYPE', value: 'LINUX' }
             steps {
+                echo "🔍 Checking Docker, Docker-Compose, Postgres, Redis..."
+
                 sh """
-                sshpass -p '${PASSWORD}' ssh -o StrictHostKeyChecking=no ${USERNAME}@${TARGET_IP} '
-                    echo "⚙ Checking Docker Compose..."
-                    if command -v docker-compose >/dev/null 2>&1; then
-                        echo "✔ Docker Compose already installed"
-                        docker-compose --version
+                    echo '===== DOCKER CHECK ====='
+                    if command -v docker >/dev/null; then
+                        echo '✔ Docker Installed'
                     else
-                        echo "❌ Docker Compose not found → Installing..."
-                        sudo curl -L "https://github.com/docker/compose/releases/download/2.24.6/docker-compose-\$(uname -s)-\$(uname -m)" -o /usr/local/bin/docker-compose
-                        sudo chmod +x /usr/local/bin/docker-compose
+                        echo '❌ Docker NOT installed → Installing'
+                        apt update && apt install -y docker.io
                     fi
-                '
+
+                    echo '===== DOCKER COMPOSE CHECK ====='
+                    if docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null; then
+                        echo '✔ Docker Compose Installed'
+                    else
+                        echo '❌ Compose NOT installed → Installing'
+                        apt install -y docker-compose || true
+                    fi
+
+                    echo '===== POSTGRES CHECK ====='
+                    if command -v psql >/dev/null; then
+                        echo '✔ PostgreSQL Installed → Healthcheck'
+                        pg_isready || echo '⚠ Postgres may not be healthy'
+                    else
+                        echo '❌ PostgreSQL NOT installed → Creating Docker Container'
+
+                        if ! docker ps -a --format '{{.Names}}' | grep -w postgres_db; then
+                            docker run -d --name postgres_db \
+                                -e POSTGRES_USER=admin \
+                                -e POSTGRES_PASSWORD=root \
+                                -e POSTGRES_DB=mydb \
+                                -p 5432:5432 \
+                                postgres
+                        else
+                            docker start postgres_db
+                        fi
+
+                        echo '⏳ Waiting for Postgres...'
+                        sleep 10
+                        docker exec postgres_db pg_isready || echo '⚠ Postgres container not ready'
+                    fi
+
+                    echo '===== REDIS CHECK ====='
+                    if command -v redis-server >/dev/null; then
+                        echo '✔ Redis Installed → Healthcheck'
+                        redis-cli ping || echo '⚠ Redis may not be healthy'
+                    else
+                        echo '❌ Redis NOT installed → Creating Docker Container'
+
+                        if ! docker ps -a --format '{{.Names}}' | grep -w redis_server; then
+                            docker run -d --name redis_server -p 6379:6379 redis
+                        else
+                            docker start redis_server
+                        fi
+
+                        echo '⏳ Waiting for Redis...'
+                        sleep 3
+                        docker exec redis_server redis-cli ping || echo '⚠ Redis container not ready'
+                    fi
                 """
             }
         }
 
-        /* 3) Setup Postgres + Redis via Docker Containers */
-        stage('Setup Postgres + Redis') {
+        /* 4) Build + Push Image */
+        stage('Docker Build & Push') {
             steps {
                 sh """
-                sshpass -p '${PASSWORD}' ssh -o StrictHostKeyChecking=no ${USERNAME}@${TARGET_IP} '
-
-                    echo "=============================="
-                    echo "🐘 Checking PostgreSQL Container"
-                    echo "=============================="
-
-                    if sudo docker ps -a --format "{{.Names}}" | grep -w "postgres_db" >/dev/null 2>&1; then
-                        echo "✔ Postgres container exists → Starting..."
-                        sudo docker start postgres_db || true
-                    else
-                        echo "❌ Postgres container not found → Creating..."
-                        sudo docker run -d --name postgres_db \\
-                            -e POSTGRES_USER=admin \\
-                            -e POSTGRES_PASSWORD=root \\
-                            -e POSTGRES_DB=mydb \\
-                            -p 5432:5432 \\
-                            --restart always \\
-                            postgres:latest
-                    fi
-
-
-                    echo "=============================="
-                    echo "🧠 Checking Redis Container"
-                    echo "=============================="
-
-                    if sudo docker ps -a --format "{{.Names}}" | grep -w "redis_server" >/dev/null 2>&1; then
-                        echo "✔ Redis container exists → Starting..."
-                        sudo docker start redis_server || true
-                    else
-                        echo "❌ Redis container not found → Creating..."
-                        sudo docker run -d --name redis_server \\
-                            -p 6379:6379 \\
-                            --restart always \\
-                            redis:latest
-                    fi
-
-
-                    echo "=============================="
-                    echo "💚 Health Check Summary"
-                    echo "=============================="
-
-                    sudo docker ps
-
-                    echo ""
-                    echo "Postgres Logs (tail):"
-                    sudo docker logs postgres_db | tail -n 5
-
-                    echo ""
-                    echo "Redis Logs (tail):"
-                    sudo docker logs redis_server | tail -n 5
-                '
+                    docker build -t ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG} -f ${DOCKERFILE_PATH} .
+                    docker push ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG}
                 """
             }
         }
 
-        /* 4) Copy docker-compose.yaml to Remote Machine */
-        stage('Copy docker-compose.yaml to Remote Server') {
-    steps {
-        sh """
-            sshpass -p '${PASSWORD}' ssh -o StrictHostKeyChecking=no ${USERNAME}@${TARGET_IP} "
-                mkdir -p C:/Users/${USERNAME}/react-app
-            "
-
-            sshpass -p '${PASSWORD}' scp -o StrictHostKeyChecking=no docker-compose.yaml ${USERNAME}@${TARGET_IP}:"C:/Users/${USERNAME}/react-app/docker-compose.yaml"
-        """
-    }
-}
-
-
-        /* 5) Deploy the App on Remote Server */
-        stage('Deploy Application on Remote Server') {
+        /* 5) Deploy via Compose */
+        stage('Deploy Using Compose') {
             steps {
                 sh """
-                    sshpass -p '${PASSWORD}' ssh -o StrictHostKeyChecking=no ${USERNAME}@${TARGET_IP} '
-                        echo "🚀 Starting Deployment..."
-                        cd ~/react-app
-                        sudo docker-compose down || true
-                        sudo docker-compose up -d --build --force-recreate
-                    '
+                    docker compose -f ${COMPOSE_FILE} pull || true
+                    docker compose -f ${COMPOSE_FILE} down
+                    docker compose -f ${COMPOSE_FILE} up -d --force-recreate
+                """
+            }
+        }
+
+        /* 6) Post Deploy Status */
+        stage('Status Check') {
+            steps {
+                sh """
+                    docker compose -f ${COMPOSE_FILE} ps
                 """
             }
         }
@@ -157,10 +138,10 @@ pipeline {
 
     post {
         success {
-            echo "🎉 Deployment Successful on Remote Server: ${TARGET_IP}"
+            echo "🚀 SUCCESS: App Live at http://${DEPLOY_SERVER_IP}:${APP_PORT}"
         }
         failure {
-            echo "❌ Deployment Failed — Check Logs"
+            echo "❌ FAILED: Check logs."
         }
     }
 }
