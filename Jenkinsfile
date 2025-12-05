@@ -1,129 +1,106 @@
 pipeline {
     agent any
-    
-    environment {
-        TARGET_IP = credentials('192.168.1.8')
-        SSH_USER = 'jtsm'
-        SSH_PASSWORD = credentials('espl@2017')
+
+    parameters {
+        string(name: 'TARGET_IP', defaultValue: '', description: 'Enter remote machine IP')
+        string(name: 'SSH_USER', defaultValue: 'ubuntu', description: 'SSH username')
+        credentials(name: 'SSH_KEY', credentialType: 'SSH_USER_PRIVATE_KEY', description: 'SSH Private Key')
     }
-    
+
     stages {
 
-        stage('Validate IP Address') {
+        stage('Stage 1: SSH Access Check') {
             steps {
                 script {
-                    if (!env.TARGET_IP) error "TARGET_IP not set"
-                    echo "Target IP: ${env.TARGET_IP}"
-                }
-            }
-        }
-
-        stage('SSH Test') {
-            steps {
-                script {
-                    def status = sh(script: """
-                        sshpass -p '${SSH_PASSWORD}' ssh -o StrictHostKeyChecking=no \
-                        ${SSH_USER}@${TARGET_IP} 'echo ok'
-                    """, returnStatus: true)
-
-                    if (status != 0) error "SSH failed!"
-                    echo "SSH OK"
-                }
-            }
-        }
-
-        stage('Install Docker & Compose') {
-            steps {
-                script {
-
-                    // Install Docker
+                    echo "Connecting to ${params.TARGET_IP}"
                     sh """
-                        sshpass -p '${SSH_PASSWORD}' ssh -o StrictHostKeyChecking=no \
-                        ${SSH_USER}@${TARGET_IP} 'which docker || curl -fsSL https://get.docker.com | sh'
-                    """
-
-                    // Install Docker Compose
-                    sh """
-                        sshpass -p '${SSH_PASSWORD}' ssh -o StrictHostKeyChecking=no \
-                        ${SSH_USER}@${TARGET_IP} '
-                        docker compose version || (
-                        curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-\$(uname -s)-\$(uname -m)" \
-                        -o /usr/local/bin/docker-compose &&
-                        chmod +x /usr/local/bin/docker-compose
-                        )'
+                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ${params.SSH_USER}@${params.TARGET_IP} 'echo SSH Connected!'
                     """
                 }
             }
         }
 
-        stage('Upload Frontend & Compose File') {
+        stage('Stage 2: Identify OS') {
             steps {
                 script {
+                    OS = sh(
+                        script: """
+                            ssh -i ${SSH_KEY} ${params.SSH_USER}@${params.TARGET_IP} "uname -s 2>/dev/null || echo Windows"
+                        """,
+                        returnStdout: true
+                    ).trim()
 
-                    // Upload docker-compose file
-                    writeFile file: 'docker-compose.yml', text: '''
-version: '3.8'
-
-services:
-
-  frontend:
-    build: /opt/frontend
-    ports:
-      - "80:80"
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    restart: unless-stopped
-
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: appdb
-      POSTGRES_USER: appuser
-      POSTGRES_PASSWORD: apppass123
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
-
-volumes:
-  postgres_data:
-                    '''
-
-                    sh """
-                        scp -o StrictHostKeyChecking=no docker-compose.yml \
-                        ${SSH_USER}@${TARGET_IP}:/opt/docker-compose.yml
-                    """
-
-                    // Upload frontend source
-                    sh """
-                        sshpass -p '${SSH_PASSWORD}' ssh -o StrictHostKeyChecking=no ${SSH_USER}@${TARGET_IP} 'rm -rf /opt/frontend'
-                        sshpass -p '${SSH_PASSWORD}' ssh -o StrictHostKeyChecking=no ${SSH_USER}@${TARGET_IP} 'mkdir -p /opt/frontend'
-                        scp -o StrictHostKeyChecking=no -r ./frontend/* ${SSH_USER}@${TARGET_IP}:/opt/frontend/
-                    """
+                    echo "Detected OS: ${OS}"
                 }
             }
         }
 
-        stage('Deploy Containers') {
+        stage('Stage 3: Install or Health-check Tools') {
             steps {
                 script {
 
-                    sh """
-                        sshpass -p '${SSH_PASSWORD}' ssh -o StrictHostKeyChecking=no \
-                        ${SSH_USER}@${TARGET_IP} 'cd /opt && docker compose -f docker-compose.yml down || true'
-                    """
+                    if (OS == "Linux") {
+                        echo "Linux Detected — Validating tools..."
 
-                    sh """
-                        sshpass -p '${SSH_PASSWORD}' ssh -o StrictHostKeyChecking=no \
-                        ${SSH_USER}@${TARGET_IP} 'cd /opt && docker compose -f docker-compose.yml up -d --build'
-                    """
+                        sh """
+                            ssh -i ${SSH_KEY} ${params.SSH_USER}@${params.TARGET_IP} '
+                                
+                                echo "-----------------------------"
+                                echo "Checking Docker..."
+                                echo "-----------------------------"
 
-                    echo "Deployment Completed!"
+                                if command -v docker &>/dev/null; then
+                                    echo "✔ Docker already installed"
+                                    docker --version
+                                else
+                                    echo "✘ Docker not installed — Installing..."
+                                    curl -fsSL https://get.docker.com | bash
+                                fi
+
+                                echo "-----------------------------"
+                                echo "Checking Docker Compose..."
+                                echo "-----------------------------"
+
+                                if command -v docker-compose &>/dev/null; then
+                                    echo "✔ Docker Compose already installed"
+                                    docker-compose --version
+                                else
+                                    echo "✘ Docker Compose not installed — Installing..."
+                                    sudo apt-get update && sudo apt-get install -y docker-compose
+                                fi
+
+                                echo "-----------------------------"
+                                echo "Checking Redis Container..."
+                                echo "-----------------------------"
+
+                                if docker ps | grep -w redis; then
+                                    echo "✔ Redis running"
+                                    docker ps | grep redis
+                                else
+                                    echo "✘ Redis not running — Starting..."
+                                    docker run -d --name redis -p 6379:6379 redis
+                                fi
+
+                                echo "-----------------------------"
+                                echo "Checking PostgreSQL Container..."
+                                echo "-----------------------------"
+
+                                if docker ps | grep -w postgres; then
+                                    echo "✔ PostgreSQL running"
+                                    docker ps | grep postgres
+                                else
+                                    echo "✘ PostgreSQL not running — Starting..."
+                                    docker run -d --name postgres -e POSTGRES_PASSWORD=root -p 5432:5432 postgres
+                                fi
+
+                                echo "-----------------------------"
+                                echo "Healthcheck Completed Successfully!"
+                                echo "-----------------------------"
+                            '
+                        """
+                    } else {
+                        echo "Windows Detected — Add Windows installation logic if required."
+                    }
                 }
             }
         }
@@ -131,15 +108,7 @@ volumes:
 
     post {
         always {
-            script {
-                def output = sh(script: """
-                    sshpass -p '${SSH_PASSWORD}' ssh -o StrictHostKeyChecking=no \
-                    ${SSH_USER}@${TARGET_IP} 'docker ps --format "table {{.Names}}\\t{{.Status}}"'
-                """, returnStdout: true)
-
-                echo "Containers Running:"
-                echo output
-            }
+            echo "Pipeline Execution Completed!"
         }
     }
 }
