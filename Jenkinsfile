@@ -128,16 +128,17 @@ pipeline {
 
         /* 4) Copy docker-compose.yaml to Remote Machine */
         stage('Copy docker-compose.yaml to Remote Server') {
-            steps {
-                sh """
-                    sshpass -p '${PASSWORD}' ssh -o StrictHostKeyChecking=no ${USERNAME}@${TARGET_IP} '
-                        mkdir -p ~/react-app
-                    '
+    steps {
+        sh """
+            sshpass -p '${PASSWORD}' ssh -o StrictHostKeyChecking=no ${USERNAME}@${TARGET_IP} "
+                mkdir -p C:/Users/${USERNAME}/react-app
+            "
 
-                    sshpass -p '${PASSWORD}' scp -o StrictHostKeyChecking=no docker-compose.yaml ${USERNAME}@${TARGET_IP}:~/react-app/docker-compose.yaml
-                """
-            }
-        }
+            sshpass -p '${PASSWORD}' scp -o StrictHostKeyChecking=no docker-compose.yaml ${USERNAME}@${TARGET_IP}:"C:/Users/${USERNAME}/react-app/docker-compose.yaml"
+        """
+    }
+}
+
 
         /* 5) Deploy the App on Remote Server */
         stage('Deploy Application on Remote Server') {
